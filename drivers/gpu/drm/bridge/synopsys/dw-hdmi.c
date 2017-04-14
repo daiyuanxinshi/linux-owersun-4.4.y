@@ -270,6 +270,8 @@ struct dw_hdmi {
 
 	void (*write)(struct dw_hdmi *hdmi, u8 val, int offset);
 	u8 (*read)(struct dw_hdmi *hdmi, int offset);
+	void (*enable_audio)(struct dw_hdmi *hdmi);
+	void (*disable_audio)(struct dw_hdmi *hdmi);
 
 	bool initialized;		/* hdmi is enabled before bind */
 };
@@ -830,13 +832,29 @@ void dw_hdmi_set_sample_rate(struct dw_hdmi *hdmi, unsigned int rate)
 }
 EXPORT_SYMBOL_GPL(dw_hdmi_set_sample_rate);
 
+static void dw_hdmi_ahb_audio_enable(struct dw_hdmi *hdmi)
+{
+	hdmi_set_cts_n(hdmi, hdmi->audio_cts, hdmi->audio_n);
+}
+
+static void dw_hdmi_ahb_audio_disable(struct dw_hdmi *hdmi)
+{
+	hdmi_set_cts_n(hdmi, hdmi->audio_cts, 0);
+}
+
+static void dw_hdmi_i2s_audio_enable(struct dw_hdmi *hdmi)
+{
+	hdmi_set_cts_n(hdmi, hdmi->audio_cts, hdmi->audio_n);
+}
+
 void dw_hdmi_audio_enable(struct dw_hdmi *hdmi)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&hdmi->audio_lock, flags);
 	hdmi->audio_enable = true;
-	hdmi_set_cts_n(hdmi, hdmi->audio_cts, hdmi->audio_n);
+	if (hdmi->enable_audio)
+		hdmi->enable_audio(hdmi);
 	spin_unlock_irqrestore(&hdmi->audio_lock, flags);
 }
 EXPORT_SYMBOL_GPL(dw_hdmi_audio_enable);
@@ -847,7 +865,8 @@ void dw_hdmi_audio_disable(struct dw_hdmi *hdmi)
 
 	spin_lock_irqsave(&hdmi->audio_lock, flags);
 	hdmi->audio_enable = false;
-	hdmi_set_cts_n(hdmi, hdmi->audio_cts, 0);
+	if (hdmi->disable_audio)
+		hdmi->disable_audio(hdmi);
 	spin_unlock_irqrestore(&hdmi->audio_lock, flags);
 }
 EXPORT_SYMBOL_GPL(dw_hdmi_audio_disable);
@@ -3771,6 +3790,8 @@ int dw_hdmi_bind(struct device *dev, struct device *master,
 		audio.irq = irq;
 		audio.hdmi = hdmi;
 		audio.eld = hdmi->connector.eld;
+		hdmi->enable_audio = dw_hdmi_ahb_audio_enable;
+		hdmi->disable_audio = dw_hdmi_ahb_audio_disable;
 
 		pdevinfo.name = "dw-hdmi-ahb-audio";
 		pdevinfo.data = &audio;
@@ -3784,6 +3805,7 @@ int dw_hdmi_bind(struct device *dev, struct device *master,
 		audio.write	= hdmi_writeb;
 		audio.read	= hdmi_readb;
 		audio.mod	= hdmi_modb;
+		hdmi->enable_audio = dw_hdmi_i2s_audio_enable;
 
 		pdevinfo.name = "dw-hdmi-i2s-audio";
 		pdevinfo.data = &audio;

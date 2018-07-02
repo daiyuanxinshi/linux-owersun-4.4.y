@@ -130,6 +130,7 @@
 			opp-hz = /bits/ 64 <600000000>;
 			opp-microvolt = <950000 950000 1340000>;
 			clock-latency-ns = <40000>;
+			status = "disabled";
 		};
 		opp-816000000 {
 			opp-hz = /bits/ 64 <816000000>;

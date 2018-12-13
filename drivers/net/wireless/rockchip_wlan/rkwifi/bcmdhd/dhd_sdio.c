@@ -121,6 +121,7 @@ static int dhdsdio_resume(void *context);
 #define MAX_MEMBLOCK  (32 * 1024)	/* Block size used for downloading of dongle image */
 
 #define MAX_DATA_BUF	(64 * 1024)	/* Must be large enough to hold biggest possible glom */
+#define MAX_MEM_BUF	4096
 
 #ifndef DHD_FIRSTREAD
 #define DHD_FIRSTREAD   32
@@ -444,6 +445,7 @@ typedef struct dhd_bus {
 #endif /* defined (BT_OVER_SDIO) */
 	uint		txglomframes;	/* Number of tx glom frames (superframes) */
 	uint		txglompkts;		/* Number of packets from tx glom frames */
+	uint8		*membuf;		/* Buffer for dhdsdio_membytes */
 } dhd_bus_t;
 
 
@@ -2787,13 +2789,15 @@ dhd_bus_txctl(struct dhd_bus *bus, uchar *msg, uint msglen)
 
 
 	/* Need to lock here to protect txseq and SDIO tx calls */
+	dhd_os_sdlock(bus->dhd);
 	if (bus->dhd->conf->txctl_tmo_fix > 0 && !TXCTLOK(bus)) {
 		bus->ctrl_wait = TRUE;
+		dhd_os_sdunlock(bus->dhd);
 		wait_event_interruptible_timeout(bus->ctrl_tx_wait, TXCTLOK(bus),
 			msecs_to_jiffies(bus->dhd->conf->txctl_tmo_fix));
+		dhd_os_sdlock(bus->dhd);
 		bus->ctrl_wait = FALSE;
 	}
-	dhd_os_sdlock(bus->dhd);
 
 	BUS_WAKE(bus);
 
@@ -3386,6 +3390,7 @@ dhdsdio_membytes(dhd_bus_t *bus, bool write, uint32 address, uint8 *data, uint s
 	int bcmerror = 0;
 	uint32 sdaddr;
 	uint dsize;
+	uint8 *pdata;
 
 	/* In remap mode, adjust address beyond socram and redirect
 	 * to devram at SOCDEVRAM_BP_ADDR since remap address > orig_ramsize
@@ -3414,10 +3419,19 @@ dhdsdio_membytes(dhd_bus_t *bus, bool write, uint32 address, uint8 *data, uint s
 		DHD_INFO(("%s: %s %d bytes at offset 0x%08x in window 0x%08x\n",
 		          __FUNCTION__, (write ? "write" : "read"), dsize, sdaddr,
 		          (address & SBSDIO_SBWINDOW_MASK)));
-		if ((bcmerror = bcmsdh_rwdata(bus->sdh, write, sdaddr, data, dsize))) {
+		if (dsize <= MAX_MEM_BUF) {
+			pdata = bus->membuf;
+			if (write)
+				memcpy(bus->membuf, data, dsize);
+		} else {
+			pdata = data;
+		}
+		if ((bcmerror = bcmsdh_rwdata(bus->sdh, write, sdaddr, pdata, dsize))) {
 			DHD_ERROR(("%s: membytes transfer failed\n", __FUNCTION__));
 			break;
 		}
+		if (dsize <= MAX_MEM_BUF && !write)
+			memcpy(data, bus->membuf, dsize);
 
 		/* Adjust for next transfer (if any) */
 		if ((size -= dsize)) {
@@ -5862,8 +5876,7 @@ dhdsdio_readframes(dhd_bus_t *bus, uint maxframes, bool *finished)
 			dhdsdio_sendpendctl(bus);
 		} else if (bus->dotxinrx && (bus->clkstate == CLK_AVAIL) &&
 			!bus->fcstate && DATAOK(bus) &&
-			(pktq_mlen(&bus->txq, ~bus->flowcontrol) > bus->txinrx_thres) &&
-			bus->dhd->conf->tx_in_rx) {
+			(pktq_mlen(&bus->txq, ~bus->flowcontrol) > bus->txinrx_thres)) {
 			dhdsdio_sendfromq(bus, dhd_txbound);
 #ifdef DHDTCPACK_SUPPRESS
 			/* In TCPACK_SUP_DELAYTX mode, do txinrx only if
@@ -6750,7 +6763,8 @@ clkwait:
 	 * or clock availability.  (Allows tx loop to check ipend if desired.)
 	 * (Unless register access seems hosed, as we may not be able to ACK...)
 	 */
-	if (!bus->dhd->conf->oob_enabled_later && bus->intr && bus->intdis && !bcmsdh_regfail(sdh)) {
+	if (bus->intr && bus->intdis && !bcmsdh_regfail(sdh) &&
+			!(bus->dhd->conf->oob_enabled_later && !bus->ctrl_frame_stat)) {
 		DHD_INTR(("%s: enable SDIO interrupts, rxdone %d framecnt %d\n",
 		          __FUNCTION__, rxdone, framecnt));
 		bus->intdis = FALSE;
@@ -6808,7 +6822,7 @@ clkwait:
 	}
 	/* Resched the DPC if ctrl cmd is pending on bus credit */
 	if (bus->ctrl_frame_stat) {
-		if (bus->dhd->conf->txctl_tmo_fix > 0) {
+		if (bus->dhd->conf->txctl_tmo_fix) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			if (!kthread_should_stop())
 				schedule_timeout(1);
@@ -6856,7 +6870,8 @@ exit:
 		 * or clock availability.  (Allows tx loop to check ipend if desired.)
 		 * (Unless register access seems hosed, as we may not be able to ACK...)
 		 */
-		if (bus->dhd->conf->oob_enabled_later && bus->intr && bus->intdis && !bcmsdh_regfail(sdh)) {
+		if (bus->intr && bus->intdis && !bcmsdh_regfail(sdh) &&
+				(bus->dhd->conf->oob_enabled_later && !bus->ctrl_frame_stat)) {
 			DHD_INTR(("%s: enable SDIO interrupts, rxdone %d framecnt %d\n",
 					  __FUNCTION__, rxdone, framecnt));
 			bus->intdis = FALSE;
@@ -8165,6 +8180,23 @@ dhdsdio_probe_malloc(dhd_bus_t *bus, osl_t *osh, void *sdh)
 			DHD_OS_PREFREE(bus->dhd, bus->rxbuf, bus->rxblen);
 		goto fail;
 	}
+	/* Allocate buffer to membuf */
+	bus->membuf = MALLOC(osh, MAX_MEM_BUF);
+	if (bus->membuf == NULL) {
+		DHD_ERROR(("%s: MALLOC of %d-byte membuf failed\n",
+			__FUNCTION__, MAX_MEM_BUF));
+		if (bus->databuf) {
+#ifndef CONFIG_DHD_USE_STATIC_BUF
+			MFREE(osh, bus->databuf, MAX_DATA_BUF);
+#endif
+			bus->databuf = NULL;
+		}
+		/* release rxbuf which was already located as above */
+		if (!bus->rxblen)
+			DHD_OS_PREFREE(bus->dhd, bus->rxbuf, bus->rxblen);
+		goto fail;
+	}
+	memset(bus->membuf, 0, MAX_MEM_BUF);
 
 	/* Align the buffer */
 	if ((uintptr)bus->databuf % DHD_SDALIGN)
@@ -8439,6 +8471,11 @@ dhdsdio_release_malloc(dhd_bus_t *bus, osl_t *osh)
 		MFREE(osh, bus->databuf, MAX_DATA_BUF);
 #endif
 		bus->databuf = NULL;
+	}
+
+	if (bus->membuf) {
+		MFREE(osh, bus->membuf, MAX_DATA_BUF);
+		bus->membuf = NULL;
 	}
 
 	if (bus->vars && bus->varsz) {

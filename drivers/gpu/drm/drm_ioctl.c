@@ -61,6 +61,9 @@ static int drm_getunique(struct drm_device *dev, void *data,
 	if (!u || !master)
 		return -EFAULT;
 
+	if (!master)
+		return -EINVAL;
+
 	if (u->unique_len >= master->unique_len) {
 		if (copy_to_user(u->unique, master->unique, master->unique_len))
 			return -EFAULT;

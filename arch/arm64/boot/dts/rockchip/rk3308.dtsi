@@ -997,6 +997,7 @@
 		rockchip,cru = <&cru>;
 		rockchip,grf = <&grf>;
 		rockchip,mclk-calibrate;
+		rockchip,io-multiplex;
 		status = "disabled";
 	};
 

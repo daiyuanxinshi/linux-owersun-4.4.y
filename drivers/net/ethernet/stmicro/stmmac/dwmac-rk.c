@@ -33,6 +33,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/soc/rockchip/rk_vendor_storage.h>
 #include "stmmac_platform.h"
+#include "dwmac-rk-tool.h"
 
 struct rk_priv_data;
 struct rk_gmac_ops {
@@ -1681,6 +1682,40 @@ void rk_setup_mac_addr(unsigned char *addr)
 	addr[5] = (char)(0xff & temp);
 }
 #endif /* CONFIG_PLAT_RK3399_ODROIDN1 */
+
+void dwmac_rk_set_rgmii_delayline(struct stmmac_priv *priv,
+				  int tx_delay, int rx_delay)
+{
+	struct rk_priv_data *bsp_priv = priv->plat->bsp_priv;
+
+	if (bsp_priv->ops->set_to_rgmii) {
+		bsp_priv->ops->set_to_rgmii(bsp_priv, tx_delay, rx_delay);
+		bsp_priv->tx_delay = tx_delay;
+		bsp_priv->rx_delay = rx_delay;
+	}
+}
+EXPORT_SYMBOL(dwmac_rk_set_rgmii_delayline);
+
+void dwmac_rk_get_rgmii_delayline(struct stmmac_priv *priv,
+				  int *tx_delay, int *rx_delay)
+{
+	struct rk_priv_data *bsp_priv = priv->plat->bsp_priv;
+
+	if (!bsp_priv->ops->set_to_rgmii)
+		return;
+
+	*tx_delay = bsp_priv->tx_delay;
+	*rx_delay = bsp_priv->rx_delay;
+}
+EXPORT_SYMBOL(dwmac_rk_get_rgmii_delayline);
+
+int dwmac_rk_get_phy_interface(struct stmmac_priv *priv)
+{
+	struct rk_priv_data *bsp_priv = priv->plat->bsp_priv;
+
+	return bsp_priv->phy_iface;
+}
+EXPORT_SYMBOL(dwmac_rk_get_phy_interface);
 
 void __weak rk_devinfo_get_eth_mac(u8 *mac)
 {

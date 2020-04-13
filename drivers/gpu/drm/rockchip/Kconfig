@@ -67,7 +67,7 @@ config ROCKCHIP_MIPI_CSI_TX
 	help
 	  This selects support for Rockchip SoC specific extensions
 	  for the rocckhip mipi CSI TX driver. If you want to
-	  enable MIPI CSI on RK1808 based SoC, you should selet this
+	  enable MIPI CSI on RK1808 based SoC, you should select this
 	  option.
 
 config ROCKCHIP_ANALOGIX_DP

@@ -1308,6 +1308,7 @@ static void rockchip_drm_set_property_default(struct drm_device *drm)
 	state = drm_atomic_helper_duplicate_state(drm, conf->acquire_ctx);
 	if (!state) {
 		DRM_ERROR("failed to alloc atomic state\n");
+		ret = -ENOMEM;
 		goto err_unlock;
 	}
 	state->acquire_ctx = conf->acquire_ctx;
@@ -1744,7 +1745,7 @@ static struct drm_driver rockchip_drm_driver = {
 };
 
 #ifdef CONFIG_PM_SLEEP
-static void rockchip_drm_fb_suspend(struct drm_device *drm)
+void rockchip_drm_fb_suspend(struct drm_device *drm)
 {
 	struct rockchip_drm_private *priv = drm->dev_private;
 
@@ -1753,7 +1754,7 @@ static void rockchip_drm_fb_suspend(struct drm_device *drm)
 	console_unlock();
 }
 
-static void rockchip_drm_fb_resume(struct drm_device *drm)
+void rockchip_drm_fb_resume(struct drm_device *drm)
 {
 	struct rockchip_drm_private *priv = drm->dev_private;
 
